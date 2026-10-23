@@ -1,0 +1,52 @@
+# Distributed topology: feed -> redis -> pricer shards -> redis -> gateways -> web.
+#   docker compose up --build            # http://localhost:8080
+#   docker compose up --build --scale gateway=3
+x-backend: &backend
+  build: ./backend
+  restart: unless-stopped
+  depends_on:
+    redis: {condition: service_healthy}
+  environment: &env
+    OPTDESK_BUS_URL: redis://redis:6379/0
+    OPTDESK_TICK_HZ: "30"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 15
+
+  feed:
+    <<: *backend
+    command: ["feed"]
+
+  pricer-a:
+    <<: *backend
+    command: ["pricer"]
+    environment:
+      <<: *env
+      OPTDESK_PRICER_SYMBOLS: SPY,QQQ
+
+  pricer-b:
+    <<: *backend
+    command: ["pricer"]
+    environment:
+      <<: *env
+      OPTDESK_PRICER_SYMBOLS: AAPL,NVDA,TSLA
+
+  gateway:
+    <<: *backend
+    command: ["gateway"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      retries: 10
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on: [gateway]
+    ports: ["8080:80"]
